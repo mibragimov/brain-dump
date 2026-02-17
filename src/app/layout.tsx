@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Brain Dump",
-  description: "Just dump everything in your head",
+  title: "Brain Dump + AI",
+  description: "Just type everything in your head. Let AI help organize.",
 };
 
 export default function RootLayout({
