@@ -36,10 +36,15 @@ Open http://localhost:3000
 
 ## Environment
 
-Create `.env.local` for AI features:
+Create `.env.local` for AI features (OpenAI preferred, MiniMax fallback):
 
 ```bash
-MINIMAX_API_KEY=your_api_key_here
+OPENAI_API_KEY=your_openai_key
+OPENAI_MODEL=gpt-4o-mini
+
+# Optional fallback
+MINIMAX_API_KEY=your_minimax_key
+MINIMAX_MODEL=abab6.5s-chat
 ```
 
 Without a key, the app falls back to mock AI responses so flows remain testable.
