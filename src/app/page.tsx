@@ -1,20 +1,39 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { 
-  Save, Trash2, Copy, Check, Sparkles, Wand2, Search, Download, Upload, 
-  X, ChevronDown, ChevronUp, Lightbulb, Zap, Brain, MessageSquare, 
-  Tag, Calendar, Archive, FileText, Sparkles as Stars, ArrowRight
+import { useEffect, useMemo, useState } from "react";
+import {
+  Brain,
+  Search,
+  Sparkles,
+  Download,
+  Upload,
+  CheckSquare,
+  Square,
+  Plus,
+  Trash2,
 } from "lucide-react";
+import { track, exportAnalytics } from "../lib/analytics";
+
+type TaskStatus = "open" | "done";
+
+interface TaskItem {
+  id: string;
+  label: string;
+  status: TaskStatus;
+  dueDate?: string | null;
+  source: "ai" | "manual";
+}
 
 interface Dump {
   id: string;
   content: string;
-  createdAt: string;
   tags: string[];
-  summary?: string;
-  actionItems?: string[];
+  entities: string[];
+  createdAt: string;
+  updatedAt: string;
+  aiSummary: string | null;
+  aiActions: string[] | null;
+  tasks: TaskItem[];
 }
 
 interface AIResponse {
@@ -23,722 +42,568 @@ interface AIResponse {
   tags: string[];
 }
 
-// Cartoon avatar component
-function CartoonBrain({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 100 100" className={className}>
-      <circle cx="50" cy="50" r="45" fill="#8B5CF6" />
-      <ellipse cx="35" cy="40" rx="12" ry="15" fill="white" opacity="0.9" />
-      <ellipse cx="65" cy="40" rx="12" ry="15" fill="white" opacity="0.9" />
-      <circle cx="35" cy="40" r="6" fill="#1E293B" />
-      <circle cx="65" cy="40" r="6" fill="#1E293B" />
-      <circle cx="37" cy="38" r="2" fill="white" />
-      <circle cx="67" cy="38" r="2" fill="white" />
-      <path d="M 35 60 Q 50 75 65 60" stroke="white" strokeWidth="3" fill="none" strokeLinecap="round" />
-      <path d="M 30 25 L 35 35" stroke="#FCD34D" strokeWidth="4" strokeLinecap="round" />
-      <path d="M 70 25 L 65 35" stroke="#FCD34D" strokeWidth="4" strokeLinecap="round" />
-      <circle cx="30" cy="22" r="4" fill="#FCD34D" />
-      <circle cx="70" cy="22" r="4" fill="#FCD34D" />
-    </svg>
-  );
+const STORAGE_DUMPS = "brain_dump_v2_dumps";
+const STORAGE_DRAFT = "brain_dump_v2_draft";
+
+function uid() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-// Floating character
-function FloatingCharacter() {
-  return (
-    <motion.div
-      animate={{ 
-        y: [0, -10, 0],
-        rotate: [0, 5, -5, 0]
-      }}
-      transition={{ 
-        duration: 3,
-        repeat: Infinity,
-        ease: "easeInOut"
-      }}
-      className="fixed bottom-10 right-10 w-24 h-24 z-0 pointer-events-none"
-    >
-      <CartoonBrain className="w-full h-full" />
-    </motion.div>
-  );
+function parseHashtags(text: string): string[] {
+  const tags = text.match(/(^|\s)#([a-zA-Z0-9_-]+)/g) || [];
+  return Array.from(new Set(tags.map((t) => t.replace(/^\s*#/, "").toLowerCase())));
 }
 
-// Bouncing button wrapper
-function BouncyButton({ children, onClick, className, disabled }: any) {
-  return (
-    <motion.button
-      onClick={onClick}
-      disabled={disabled}
-      whileHover={{ scale: 1.05 }}
-      whileTap={{ scale: 0.95 }}
-      className={className}
-    >
-      {children}
-    </motion.button>
-  );
+function parseEntities(text: string): string[] {
+  // MVP-lite entity heuristic: capitalized words/phrases
+  const matches = text.match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/g) || [];
+  return Array.from(new Set(matches)).slice(0, 12);
 }
 
-// Pop-up notification
-function Toast({ message, onClose }: { message: string; onClose: () => void }) {
-  useEffect(() => {
-    const timer = setTimeout(onClose, 3000);
-    return () => clearTimeout(timer);
-  }, [onClose]);
+function normalizeDump(raw: Partial<Dump>): Dump {
+  return {
+    id: raw.id || uid(),
+    content: raw.content || "",
+    tags: raw.tags || [],
+    entities: raw.entities || [],
+    createdAt: raw.createdAt || new Date().toISOString(),
+    updatedAt: raw.updatedAt || new Date().toISOString(),
+    aiSummary: raw.aiSummary ?? null,
+    aiActions: raw.aiActions ?? null,
+    tasks: (raw.tasks || []).map((t) => ({
+      id: t.id || uid(),
+      label: t.label || "",
+      status: t.status === "done" ? "done" : "open",
+      dueDate: t.dueDate ?? null,
+      source: t.source === "manual" ? "manual" : "ai",
+    })),
+  };
+}
 
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 50, scale: 0.8 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 50, scale: 0.8 }}
-      className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-full shadow-lg z-50"
-    >
-      {message}
-    </motion.div>
-  );
+function isToday(iso?: string | null) {
+  if (!iso) return false;
+  const d = new Date(iso);
+  const n = new Date();
+  return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+}
+
+function isThisWeek(iso?: string | null) {
+  if (!iso) return false;
+  const d = new Date(iso);
+  const now = new Date();
+  const day = now.getDay();
+  const diffToMonday = (day + 6) % 7;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - diffToMonday);
+  monday.setHours(0, 0, 0, 0);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+  return d >= monday && d <= sunday;
 }
 
 export default function Home() {
   const [dumps, setDumps] = useState<Dump[]>([]);
-  const [currentText, setCurrentText] = useState("");
-  const [saved, setSaved] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [selectedDumpId, setSelectedDumpId] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<"saved" | "saving">("saved");
+  const [search, setSearch] = useState("");
+  const [tagFilter, setTagFilter] = useState<string>("");
+  const [entityFilter, setEntityFilter] = useState<string>("");
+  const [taskWindow, setTaskWindow] = useState<"today" | "week" | "all">("today");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [expandedDump, setExpandedDump] = useState<string | null>(null);
-  const [showAIResults, setShowAIResults] = useState(false);
-  const [aiResults, setAiResults] = useState<AIResponse | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem("brain-dumps");
-    if (saved) setDumps(JSON.parse(saved));
-    
-    const current = localStorage.getItem("brain-dump-current");
-    if (current) setCurrentText(current);
+    const raw = localStorage.getItem(STORAGE_DUMPS);
+    const draftRaw = localStorage.getItem(STORAGE_DRAFT);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as Partial<Dump>[];
+        setDumps(parsed.map(normalizeDump).sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)));
+      } catch {
+        setDumps([]);
+      }
+    }
+    if (draftRaw) setDraft(draftRaw);
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("brain-dump-current", currentText);
-    setSaved(false);
-    
-    const timer = setTimeout(() => {
-      setSaved(true);
-    }, 1500);
+    localStorage.setItem(STORAGE_DRAFT, draft);
+    setSaveState("saving");
+    const t = setTimeout(() => setSaveState("saved"), 400);
+    return () => clearTimeout(t);
+  }, [draft]);
 
-    return () => clearTimeout(timer);
-  }, [currentText]);
+  useEffect(() => {
+    localStorage.setItem(STORAGE_DUMPS, JSON.stringify(dumps));
+  }, [dumps]);
 
-  const allTags = Array.from(new Set(dumps.flatMap(d => d.tags)));
-
-  const filteredDumps = dumps.filter(dump => {
-    const matchesSearch = dump.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      dump.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
-    const matchesTags = selectedTags.length === 0 || 
-      selectedTags.every(t => dump.tags.includes(t));
-    return matchesSearch && matchesTags;
-  });
-
-  const saveDump = () => {
-    if (!currentText.trim()) return;
-    const today = new Date().toISOString().split("T")[0];
-    const newDump: Dump = {
-      id: today,
-      content: currentText,
-      createdAt: new Date().toISOString(),
-      tags: extractTags(currentText),
-    };
-    
-    const existingIndex = dumps.findIndex(d => d.id === today);
-    if (existingIndex >= 0) {
-      const updated = [...dumps];
-      updated[existingIndex] = newDump;
-      setDumps(updated);
-    } else {
-      setDumps([newDump, ...dumps]);
-    }
-    localStorage.setItem("brain-dumps", JSON.stringify(dumps));
-    setSaved(true);
-    setToast("Saved! 🎉");
-  };
-
-  const extractTags = (text: string): string[] => {
-    const tagMatches = text.match(/#\w+/g);
-    if (tagMatches) {
-      return tagMatches.map(t => t.replace('#', ''));
-    }
-    return [];
-  };
-
-  const analyzeWithAI = async () => {
-    if (!currentText.trim()) return;
-    
-    setIsAnalyzing(true);
-    setShowAIResults(false);
-    
-    try {
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: currentText })
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setAiResults(data);
-        setShowAIResults(true);
-        setToast("AI Analysis complete! ✨");
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        void runAIOrganize();
       }
-    } catch (error) {
-      console.error('AI analysis failed:', error);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, selectedDumpId, dumps]);
+
+  const selectedDump = useMemo(
+    () => dumps.find((d) => d.id === selectedDumpId) || null,
+    [dumps, selectedDumpId]
+  );
+
+  const allTags = useMemo(() => Array.from(new Set(dumps.flatMap((d) => d.tags))), [dumps]);
+  const allEntities = useMemo(() => Array.from(new Set(dumps.flatMap((d) => d.entities))), [dumps]);
+
+  const visibleDumps = useMemo(() => {
+    return dumps.filter((d) => {
+      const q = search.trim().toLowerCase();
+      const matchesSearch =
+        !q ||
+        d.content.toLowerCase().includes(q) ||
+        (d.aiSummary || "").toLowerCase().includes(q) ||
+        d.tags.some((t) => t.includes(q)) ||
+        d.entities.some((e) => e.toLowerCase().includes(q));
+
+      const matchesTag = !tagFilter || d.tags.includes(tagFilter);
+      const matchesEntity = !entityFilter || d.entities.includes(entityFilter);
+      return matchesSearch && matchesTag && matchesEntity;
+    });
+  }, [dumps, search, tagFilter, entityFilter]);
+
+  const aggregatedTasks = useMemo(() => {
+    const rows: Array<{ dumpId: string; dumpCreatedAt: string; tags: string[]; entities: string[]; task: TaskItem }> = [];
+    dumps.forEach((d) => {
+      d.tasks.forEach((task) => {
+        if (task.status !== "open") return;
+        if (taskWindow === "today" && !isToday(task.dueDate)) return;
+        if (taskWindow === "week" && !isThisWeek(task.dueDate)) return;
+        if (tagFilter && !d.tags.includes(tagFilter)) return;
+        if (entityFilter && !d.entities.includes(entityFilter)) return;
+        rows.push({ dumpId: d.id, dumpCreatedAt: d.createdAt, tags: d.tags, entities: d.entities, task });
+      });
+    });
+    return rows.sort((a, b) => +new Date(b.dumpCreatedAt) - +new Date(a.dumpCreatedAt));
+  }, [dumps, taskWindow, tagFilter, entityFilter]);
+
+  function upsertDump(update: Dump) {
+    setDumps((prev) => {
+      const idx = prev.findIndex((d) => d.id === update.id);
+      if (idx === -1) return [update, ...prev];
+      const cp = [...prev];
+      cp[idx] = update;
+      return cp.sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+    });
+  }
+
+  function saveCurrentDump() {
+    if (!draft.trim()) return;
+    const now = new Date().toISOString();
+    const tags = parseHashtags(draft);
+    const entities = parseEntities(draft);
+
+    if (selectedDump) {
+      const next = normalizeDump({
+        ...selectedDump,
+        content: draft,
+        tags: Array.from(new Set([...tags, ...selectedDump.tags])),
+        entities: Array.from(new Set([...entities, ...selectedDump.entities])),
+        updatedAt: now,
+      });
+      upsertDump(next);
+      track("dump_saved", { kind: "update" });
+      return;
+    }
+
+    const created = normalizeDump({
+      id: uid(),
+      content: draft,
+      tags,
+      entities,
+      createdAt: now,
+      updatedAt: now,
+      tasks: [],
+      aiSummary: null,
+      aiActions: null,
+    });
+    upsertDump(created);
+    setSelectedDumpId(created.id);
+    track("dump_saved", { kind: "create" });
+  }
+
+  async function runAIOrganize() {
+    if (!draft.trim()) return;
+    setIsAnalyzing(true);
+
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: draft }),
+      });
+
+      if (!response.ok) throw new Error("AI analyze failed");
+      const ai = (await response.json()) as AIResponse;
+
+      const base = selectedDump
+        ? selectedDump
+        : normalizeDump({
+            id: uid(),
+            content: draft,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            tags: parseHashtags(draft),
+            entities: parseEntities(draft),
+            tasks: [],
+          });
+
+      const aiTasks: TaskItem[] = (ai.actionItems || []).map((label) => ({
+        id: uid(),
+        label,
+        status: "open",
+        dueDate: null,
+        source: "ai",
+      }));
+
+      const next = normalizeDump({
+        ...base,
+        content: draft,
+        tags: Array.from(new Set([...(base.tags || []), ...parseHashtags(draft), ...(ai.tags || []).map((t) => t.toLowerCase())])),
+        entities: Array.from(new Set([...(base.entities || []), ...parseEntities(draft)])), 
+        aiSummary: ai.summary || null,
+        aiActions: ai.actionItems || [],
+        tasks: [...(base.tasks || []).filter((t) => t.source !== "ai"), ...aiTasks],
+        updatedAt: new Date().toISOString(),
+      });
+
+      upsertDump(next);
+      setSelectedDumpId(next.id);
+      track("ai_organized", { actions: aiTasks.length, tags: next.tags.length });
+    } catch (e) {
+      console.error(e);
+      alert("AI is temporarily unavailable. Your draft is still safe.");
     } finally {
       setIsAnalyzing(false);
     }
-  };
+  }
 
-  const applyAISuggestions = () => {
-    if (!aiResults) return;
-    
-    const today = new Date().toISOString().split("T")[0];
-    const newDump: Dump = {
-      id: today,
-      content: currentText,
-      createdAt: new Date().toISOString(),
-      tags: [...new Set([...extractTags(currentText), ...aiResults.tags])],
-      summary: aiResults.summary,
-      actionItems: aiResults.actionItems,
+  function openDump(id: string) {
+    const d = dumps.find((x) => x.id === id);
+    if (!d) return;
+    setSelectedDumpId(d.id);
+    setDraft(d.content);
+  }
+
+  function addManualTask() {
+    if (!selectedDump) return;
+    const label = prompt("Task text");
+    if (!label?.trim()) return;
+    const next = normalizeDump({
+      ...selectedDump,
+      tasks: [
+        ...selectedDump.tasks,
+        { id: uid(), label: label.trim(), status: "open", dueDate: null, source: "manual" },
+      ],
+      updatedAt: new Date().toISOString(),
+    });
+    upsertDump(next);
+  }
+
+  function toggleTask(dumpId: string, taskId: string) {
+    const d = dumps.find((x) => x.id === dumpId);
+    if (!d) return;
+    const next = normalizeDump({
+      ...d,
+      tasks: d.tasks.map((t) =>
+        t.id === taskId ? { ...t, status: t.status === "done" ? "open" : "done" } : t
+      ),
+      updatedAt: new Date().toISOString(),
+    });
+    upsertDump(next);
+  }
+
+  function removeTask(dumpId: string, taskId: string) {
+    const d = dumps.find((x) => x.id === dumpId);
+    if (!d) return;
+    const next = normalizeDump({
+      ...d,
+      tasks: d.tasks.filter((t) => t.id !== taskId),
+      updatedAt: new Date().toISOString(),
+    });
+    upsertDump(next);
+  }
+
+  function setTaskDueDate(dumpId: string, taskId: string, date: string) {
+    const d = dumps.find((x) => x.id === dumpId);
+    if (!d) return;
+    const next = normalizeDump({
+      ...d,
+      tasks: d.tasks.map((t) => (t.id === taskId ? { ...t, dueDate: date || null } : t)),
+      updatedAt: new Date().toISOString(),
+    });
+    upsertDump(next);
+  }
+
+  function exportJson() {
+    const payload = {
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      dumps,
+      analytics: JSON.parse(exportAnalytics()),
     };
-    
-    const existingIndex = dumps.findIndex(d => d.id === today);
-    if (existingIndex >= 0) {
-      const updated = [...dumps];
-      updated[existingIndex] = newDump;
-      setDumps(updated);
-    } else {
-      setDumps([newDump, ...dumps]);
-    }
-    localStorage.setItem("brain-dumps", JSON.stringify(dumps));
-    setSaved(true);
-    setShowAIResults(false);
-    setAiResults(null);
-    setToast("AI suggestions applied! 🚀");
-  };
-
-  const loadDump = (dump: Dump) => {
-    setCurrentText(dump.content);
-    if (dump.summary || dump.actionItems) {
-      setAiResults({ 
-        summary: dump.summary || '', 
-        actionItems: dump.actionItems || [],
-        tags: dump.tags 
-      });
-      setShowAIResults(true);
-    }
-    setToast("Dump loaded! 📝");
-  };
-
-  const deleteDump = (id: string) => {
-    setDumps(dumps.filter(d => d.id !== id));
-    localStorage.setItem("brain-dumps", JSON.stringify(dumps.filter(d => d.id !== id)));
-    setToast("Dump deleted 🗑️");
-  };
-
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(currentText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-    setToast("Copied to clipboard! 📋");
-  };
-
-  const exportData = () => {
-    const data = JSON.stringify(dumps, null, 2);
-    const blob = new Blob([data], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "brain-dump-backup.json";
+    a.download = `brain-dump-export-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
-    setToast("Exported! 💾");
-  };
+    URL.revokeObjectURL(url);
+    track("export_json", { dumps: dumps.length });
+  }
 
-  const importData = () => {
+  function importJson() {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".json";
-    input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          try {
-            const data = JSON.parse(e.target?.result as string);
-            setDumps(data);
-            localStorage.setItem("brain-dumps", JSON.stringify(data));
-            setToast("Imported! 📥");
-          } catch (err) {
-            alert("Invalid JSON file");
-          }
-        };
-        reader.readAsText(file);
+    input.accept = "application/json";
+    input.onchange = async () => {
+      const f = input.files?.[0];
+      if (!f) return;
+      const text = await f.text();
+      try {
+        const parsed = JSON.parse(text) as Partial<Dump>[] | { dumps?: Partial<Dump>[] };
+        const rows = Array.isArray(parsed) ? parsed : parsed.dumps || [];
+        const incoming = rows.map(normalizeDump);
+        setDumps((prev) => {
+          const map = new Map<string, Dump>();
+          prev.forEach((d) => map.set(d.id, d));
+          incoming.forEach((d) => {
+            const existing = map.get(d.id);
+            if (!existing) {
+              map.set(d.id, d);
+              return;
+            }
+            // Conflict handling: keep latest updatedAt
+            map.set(
+              d.id,
+              new Date(d.updatedAt) > new Date(existing.updatedAt) ? d : existing
+            );
+          });
+          return Array.from(map.values()).sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+        });
+        track("import_json", { imported: incoming.length });
+      } catch {
+        alert("Invalid JSON file");
       }
     };
     input.click();
-  };
-
-  const clearAll = () => {
-    if (confirm("Clear all dumps? This cannot be undone.")) {
-      setDumps([]);
-      setCurrentText("");
-      localStorage.removeItem("brain-dumps");
-      localStorage.removeItem("brain-dump-current");
-      setToast("All cleared! 🧹");
-    }
-  };
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900">
-      {/* Animated background bubbles */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        {[...Array(6)].map((_, i) => (
-          <motion.div
-            key={i}
-            initial={{ 
-              x: Math.random() * 100, 
-              y: Math.random() * 100 + 100 
-            }}
-            animate={{ 
-              y: [null, -200],
-              x: [null, Math.random() * 100 - 50]
-            }}
-            transition={{ 
-              duration: 10 + Math.random() * 10,
-              repeat: Infinity,
-              delay: Math.random() * 5
-            }}
-            className="absolute w-20 h-20 rounded-full bg-white/5"
-            style={{
-              left: `${Math.random() * 100}%`,
-              width: `${30 + Math.random() * 50}px`,
-              height: `${30 + Math.random() * 50}px`,
-            }}
-          />
-        ))}
-      </div>
-
-      <FloatingCharacter />
-
-      <AnimatePresence>
-        {toast && (
-          <Toast message={toast} onClose={() => setToast(null)} />
-        )}
-      </AnimatePresence>
-
-      <main className="relative z-10 min-h-screen p-4 md:p-8">
-        <div className="max-w-5xl mx-auto">
-          {/* Header */}
-          <motion.header 
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-8"
-          >
-            <div className="flex items-center gap-4 mb-2">
-              <motion.div
-                animate={{ rotate: [0, 10, -10, 0] }}
-                transition={{ duration: 2, repeat: Infinity }}
-                className="w-16 h-16"
-              >
-                <CartoonBrain className="w-full h-full" />
-              </motion.div>
-              <div>
-                <h1 className="text-4xl font-black text-white drop-shadow-lg">
-                  Brain Dump
-                </h1>
-                <p className="text-purple-200">Just type. Let AI help sort it out! ✨</p>
-              </div>
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <main className="mx-auto max-w-7xl p-4 md:p-8">
+        <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Brain className="text-violet-300" />
+            <div>
+              <h1 className="text-2xl font-semibold">Brain Dump + AI</h1>
+              <p className="text-sm text-slate-400">Zero-friction capture. AI-organized summaries and actions.</p>
             </div>
-          </motion.header>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={exportJson} className="rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">
+              <Download className="mr-1 inline h-4 w-4" /> Export
+            </button>
+            <button onClick={importJson} className="rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">
+              <Upload className="mr-1 inline h-4 w-4" /> Import
+            </button>
+          </div>
+        </header>
 
-          {/* Main Editor */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.1 }}
-            className="bg-white/10 backdrop-blur-lg border-2 border-white/20 rounded-3xl p-6 mb-6 shadow-2xl"
-          >
-            <div className="flex items-center gap-2 mb-4">
-              <MessageSquare className="text-purple-300" size={20} />
-              <span className="text-purple-200 font-medium">Your thoughts</span>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-7">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-medium text-slate-300">Capture</h2>
+              <span className="text-xs text-slate-400">{saveState === "saving" ? "Saving…" : "Saved"}</span>
             </div>
-            
             <textarea
-              ref={textareaRef}
-              value={currentText}
-              onChange={(e) => setCurrentText(e.target.value)}
-              placeholder="Start typing everything in your head...
-
-Ideas 💡
-Tasks 📝
-Worries 😰
-Notes 📌
-Reminders ⏰
-#tags
-
-Use #hashtags to auto-categorize!"
-              className="w-full h-72 bg-white/5 border-2 border-white/10 rounded-2xl p-6 text-base resize-none focus:outline-none focus:border-purple-400 focus:bg-white/10 text-white placeholder:text-white/40 leading-relaxed transition-all"
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="What's on your mind?"
+              className="h-72 w-full rounded-lg border border-slate-800 bg-slate-950 p-4 outline-none ring-violet-500 focus:ring-1"
             />
-            
-            <motion.div 
-              className="flex flex-wrap items-center justify-between gap-3 mt-4"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.2 }}
-            >
-              <div className="flex gap-2">
-                <BouncyButton
-                  onClick={copyToClipboard}
-                  className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl flex items-center gap-2 text-white"
-                >
-                  {copied ? <Check size={18} /> : <Copy size={18} />}
-                  <span>{copied ? "Copied!" : "Copy"}</span>
-                </BouncyButton>
-                
-                <BouncyButton
-                  onClick={saveDump}
-                  disabled={!currentText.trim()}
-                  className="px-4 py-2 bg-gradient-to-r from-green-400 to-emerald-500 hover:from-green-300 hover:to-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl flex items-center gap-2 text-green-900 font-bold"
-                >
-                  <Save size={18} />
-                  <span>{saved ? "Saved!" : "Save"}</span>
-                </BouncyButton>
-              </div>
-              
-              <BouncyButton
-                onClick={analyzeWithAI}
-                disabled={!currentText.trim() || isAnalyzing}
-                className="px-6 py-2 bg-gradient-to-r from-purple-500 via-pink-500 to-yellow-500 hover:from-purple-400 hover:via-pink-400 hover:to-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl flex items-center gap-2 text-white font-bold shadow-lg"
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button onClick={saveCurrentDump} className="rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-900 hover:bg-white">
+                Save dump
+              </button>
+              <button
+                onClick={() => void runAIOrganize()}
+                disabled={isAnalyzing || !draft.trim()}
+                className="rounded-md bg-violet-500 px-3 py-2 text-sm text-white hover:bg-violet-400 disabled:opacity-60"
               >
-                <motion.div
-                  animate={isAnalyzing ? { rotate: 360 } : {}}
-                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                >
-                  <Sparkles size={18} />
-                </motion.div>
-                <span>{isAnalyzing ? "Analyzing..." : "AI Organize"}</span>
-                <Wand2 size={18} />
-              </BouncyButton>
-            </motion.div>
+                <Sparkles className="mr-1 inline h-4 w-4" /> {isAnalyzing ? "Organizing…" : "AI Organize"}
+              </button>
+              <span className="self-center text-xs text-slate-500">Shortcut: Cmd/Ctrl + Enter</span>
+            </div>
 
-            {/* AI Results */}
-            <AnimatePresence>
-              {showAIResults && aiResults && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="mt-6 p-6 bg-gradient-to-r from-purple-500/20 via-pink-500/20 to-yellow-500/20 border-2 border-purple-400/30 rounded-2xl"
-                >
-                  <div className="flex items-center gap-2 mb-4">
-                    <motion.div
-                      animate={{ scale: [1, 1.2, 1] }}
-                      transition={{ duration: 1, repeat: Infinity }}
-                    >
-                      <Stars className="text-yellow-400" size={24} />
-                    </motion.div>
-                    <span className="font-bold text-white">AI Magic ✨</span>
-                  </div>
-                  
-                  {aiResults.summary && (
-                    <motion.div 
-                      className="mb-4"
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.1 }}
-                    >
-                      <p className="text-sm text-purple-200 mb-1">Summary</p>
-                      <p className="text-white bg-white/10 rounded-xl p-3">{aiResults.summary}</p>
-                    </motion.div>
-                  )}
-                  
-                  {aiResults.actionItems.length > 0 && (
-                    <motion.div 
-                      className="mb-4"
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.2 }}
-                    >
-                      <p className="text-sm text-purple-200 mb-1">Action Items</p>
-                      <ul className="space-y-2">
-                        {aiResults.actionItems.map((item, i) => (
-                          <motion.li 
-                            key={i}
-                            initial={{ opacity: 0, x: -10 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.1 * i }}
-                            className="flex items-center gap-2 text-white bg-white/10 rounded-xl p-3"
-                          >
-                            <span className="text-yellow-400">⚡</span>
-                            {item}
-                          </motion.li>
-                        ))}
-                      </ul>
-                    </motion.div>
-                  )}
-                  
-                  {aiResults.tags.length > 0 && (
-                    <motion.div 
-                      className="mb-4"
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.3 }}
-                    >
-                      <p className="text-sm text-purple-200 mb-1">Tags</p>
-                      <div className="flex flex-wrap gap-2">
-                        {aiResults.tags.map((tag, i) => (
-                          <motion.span 
-                            key={i}
-                            initial={{ opacity: 0, scale: 0 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            transition={{ delay: 0.05 * i }}
-                            className="px-3 py-1 bg-pink-500/30 border border-pink-400/50 rounded-full text-white text-sm"
-                          >
-                            #{tag}
-                          </motion.span>
-                        ))}
-                      </div>
-                    </motion.div>
-                  )}
-                  
-                  <BouncyButton
-                    onClick={applyAISuggestions}
-                    className="mt-2 px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 rounded-xl text-white font-bold"
-                  >
-                    Apply Magic ✨
-                  </BouncyButton>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
-
-          {/* Search and Filters */}
-          {dumps.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3 }}
-              className="bg-white/10 backdrop-blur-lg border-2 border-white/20 rounded-2xl p-4 mb-6"
-            >
-              <div className="flex flex-col md:flex-row gap-4">
-                <div className="flex-1 relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" size={18} />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search your dumps..."
-                    className="w-full bg-white/10 border-2 border-white/10 rounded-xl pl-10 pr-4 py-2 focus:outline-none focus:border-purple-400 text-white placeholder:text-white/40"
-                  />
+            {selectedDump && (
+              <div className="mt-4 rounded-lg border border-slate-800 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-medium">Tasks for selected dump</h3>
+                  <button onClick={addManualTask} className="text-xs text-violet-300 hover:text-violet-200">
+                    <Plus className="mr-1 inline h-3 w-3" /> Add task
+                  </button>
                 </div>
-                {allTags.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {allTags.slice(0, 8).map(tag => (
-                      <BouncyButton
-                        key={tag}
-                        onClick={() => setSelectedTags(
-                          selectedTags.includes(tag) 
-                            ? selectedTags.filter(t => t !== tag)
-                            : [...selectedTags, tag]
-                        )}
-                        className={`px-3 py-1 rounded-full text-sm transition-colors ${
-                          selectedTags.includes(tag)
-                            ? "bg-yellow-400 text-yellow-900 font-bold"
-                            : "bg-white/10 hover:bg-white/20 text-white"
-                        }`}
-                      >
-                        #{tag}
-                      </BouncyButton>
+                {selectedDump.tasks.length === 0 ? (
+                  <p className="text-sm text-slate-500">No tasks yet.</p>
+                ) : (
+                  <ul className="space-y-2">
+                    {selectedDump.tasks.map((task) => (
+                      <li key={task.id} className="rounded-md border border-slate-800 bg-slate-950 p-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <button
+                            onClick={() => toggleTask(selectedDump.id, task.id)}
+                            className="mt-0.5 text-slate-300 hover:text-white"
+                            aria-label="Toggle task"
+                          >
+                            {task.status === "done" ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                          </button>
+                          <div className="flex-1">
+                            <p className={task.status === "done" ? "text-slate-500 line-through" : "text-slate-200"}>{task.label}</p>
+                            <div className="mt-1 flex items-center gap-2">
+                              <input
+                                type="date"
+                                value={task.dueDate ? task.dueDate.slice(0, 10) : ""}
+                                onChange={(e) => setTaskDueDate(selectedDump.id, task.id, e.target.value)}
+                                className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs"
+                              />
+                              <span className="text-xs text-slate-500">{task.source}</span>
+                            </div>
+                          </div>
+                          <button onClick={() => removeTask(selectedDump.id, task.id)} className="text-slate-500 hover:text-red-400">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 )}
               </div>
-            </motion.div>
-          )}
-
-          {/* Stats */}
-          <motion.div 
-            className="grid grid-cols-3 gap-4 mb-6"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4 }}
-          >
-            {[
-              { label: "Dumps", value: dumps.length, icon: Archive, color: "from-purple-500 to-pink-500" },
-              { label: "Tags", value: allTags.length, icon: Tag, color: "from-pink-500 to-yellow-500" },
-              { label: "Actions", value: dumps.reduce((acc, d) => acc + (d.actionItems?.length || 0), 0), icon: Zap, color: "from-yellow-500 to-green-500" }
-            ].map((stat, i) => (
-              <motion.div
-                key={stat.label}
-                initial={{ opacity: 0, scale: 0.8 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.1 * i }}
-                className="bg-white/10 backdrop-blur-lg border-2 border-white/20 rounded-2xl p-4 text-center"
-              >
-                <stat.icon className="mx-auto mb-2 text-white" size={24} />
-                <p className={`text-3xl font-black bg-gradient-to-r ${stat.color} bg-clip-text text-transparent`}>
-                  {stat.value}
-                </p>
-                <p className="text-white/60 text-sm">{stat.label}</p>
-              </motion.div>
-            ))}
-          </motion.div>
-
-          {/* Action Buttons */}
-          <motion.div 
-            className="flex justify-center gap-4 mb-8"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.5 }}
-          >
-            <BouncyButton
-              onClick={exportData}
-              className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl flex items-center gap-2 text-white"
-            >
-              <Download size={18} />
-              Export
-            </BouncyButton>
-            <BouncyButton
-              onClick={importData}
-              className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl flex items-center gap-2 text-white"
-            >
-              <Upload size={18} />
-              Import
-            </BouncyButton>
-            <BouncyButton
-              onClick={clearAll}
-              className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 rounded-xl flex items-center gap-2 text-red-300"
-            >
-              <Trash2 size={18} />
-              Clear All
-            </BouncyButton>
-          </motion.div>
-
-          {/* Previous Dumps */}
-          <AnimatePresence>
-            {filteredDumps.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-              >
-                <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
-                  <FileText className="text-purple-300" />
-                  Previous Dumps
-                </h2>
-                <div className="space-y-4">
-                  {filteredDumps.map((dump, index) => (
-                    <motion.div
-                      key={dump.id}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: index * 0.05 }}
-                      className="bg-white/10 backdrop-blur-lg border-2 border-white/20 rounded-2xl overflow-hidden"
-                    >
-                      <div 
-                        className="flex items-center justify-between p-4 cursor-pointer hover:bg-white/10 transition-colors"
-                        onClick={() => setExpandedDump(expandedDump === dump.id ? null : dump.id)}
-                      >
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <Calendar className="text-purple-300" size={16} />
-                            <p className="font-medium text-white">
-                              {new Date(dump.createdAt).toLocaleDateString("en", {
-                                weekday: "short",
-                                month: "short",
-                                day: "numeric",
-                                year: "numeric"
-                              })}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2 mt-1">
-                            {dump.tags.length > 0 && (
-                              <div className="flex gap-1">
-                                {dump.tags.slice(0, 3).map((tag, i) => (
-                                  <span key={i} className="px-2 py-0.5 bg-pink-500/30 rounded-full text-xs text-pink-200">
-                                    #{tag}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            {dump.actionItems && dump.actionItems.length > 0 && (
-                              <span className="flex items-center gap-1 text-xs text-yellow-300">
-                                <Lightbulb size={12} />
-                                {dump.actionItems.length}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <motion.div
-                          animate={{ rotate: expandedDump === dump.id ? 180 : 0 }}
-                        >
-                          <ChevronDown className="text-white/60" size={20} />
-                        </motion.div>
-                      </div>
-                      
-                      <AnimatePresence>
-                        {expandedDump === dump.id && (
-                          <motion.div
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: "auto" }}
-                            exit={{ opacity: 0, height: 0 }}
-                            className="border-t border-white/10"
-                          >
-                            <div className="p-4">
-                              <p className="text-white/80 whitespace-pre-wrap mb-4">{dump.content}</p>
-                              
-                              {dump.summary && (
-                                <div className="mb-3 p-3 bg-purple-500/20 rounded-xl">
-                                  <p className="text-xs text-purple-300 mb-1">Summary</p>
-                                  <p className="text-white text-sm">{dump.summary}</p>
-                                </div>
-                              )}
-                              
-                              {dump.actionItems && dump.actionItems.length > 0 && (
-                                <div className="mb-3">
-                                  <p className="text-xs text-yellow-300 mb-1">Action Items</p>
-                                  <ul className="text-sm space-y-1">
-                                    {dump.actionItems.map((item, i) => (
-                                      <li key={i} className="flex items-start gap-2 text-white">
-                                        <span className="text-yellow-400">→</span>
-                                        {item}
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              )}
-                              
-                              <div className="flex gap-2 mt-4">
-                                <BouncyButton
-                                  onClick={() => loadDump(dump)}
-                                  className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-sm text-white"
-                                >
-                                  Load
-                                </BouncyButton>
-                                <BouncyButton
-                                  onClick={() => deleteDump(dump.id)}
-                                  className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 rounded-xl text-sm text-red-300"
-                                >
-                                  Delete
-                                </BouncyButton>
-                              </div>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </motion.div>
-                  ))}
-                </div>
-              </motion.div>
             )}
-          </AnimatePresence>
+          </section>
+
+          <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-5">
+            <h2 className="mb-3 text-sm font-medium text-slate-300">Today / This week actions</h2>
+            <div className="mb-3 flex flex-wrap gap-2 text-sm">
+              {([
+                ["today", "Today"],
+                ["week", "This week"],
+                ["all", "All"],
+              ] as const).map(([k, label]) => (
+                <button
+                  key={k}
+                  onClick={() => {
+                    setTaskWindow(k);
+                    track("task_window_changed", { window: k });
+                  }}
+                  className={`rounded px-2 py-1 ${taskWindow === k ? "bg-violet-500 text-white" : "bg-slate-800"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="mb-3 grid gap-2 md:grid-cols-2">
+              <select
+                value={tagFilter}
+                onChange={(e) => setTagFilter(e.target.value)}
+                className="rounded border border-slate-700 bg-slate-950 px-2 py-2 text-sm"
+              >
+                <option value="">All tags</option>
+                {allTags.map((t) => (
+                  <option key={t} value={t}>#{t}</option>
+                ))}
+              </select>
+              <select
+                value={entityFilter}
+                onChange={(e) => setEntityFilter(e.target.value)}
+                className="rounded border border-slate-700 bg-slate-950 px-2 py-2 text-sm"
+              >
+                <option value="">All entities</option>
+                {allEntities.map((e) => (
+                  <option key={e} value={e}>{e}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="max-h-80 space-y-2 overflow-auto">
+              {aggregatedTasks.length === 0 ? (
+                <p className="text-sm text-slate-500">No open tasks in this view.</p>
+              ) : (
+                aggregatedTasks.map((row) => (
+                  <button
+                    key={`${row.dumpId}-${row.task.id}`}
+                    onClick={() => openDump(row.dumpId)}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 p-2 text-left hover:border-violet-500"
+                  >
+                    <p className="text-sm text-slate-100">{row.task.label}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {new Date(row.dumpCreatedAt).toLocaleDateString()} {row.task.dueDate ? `• due ${row.task.dueDate.slice(0, 10)}` : ""}
+                    </p>
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-12">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-medium text-slate-300">History</h2>
+              <div className="relative w-full max-w-md">
+                <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-slate-500" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search content, summary, tags, entities"
+                  className="w-full rounded border border-slate-700 bg-slate-950 py-2 pl-8 pr-2 text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="max-h-96 space-y-2 overflow-auto">
+              {visibleDumps.length === 0 ? (
+                <p className="text-sm text-slate-500">No dumps yet.</p>
+              ) : (
+                visibleDumps.map((d) => (
+                  <article key={d.id} className="rounded-md border border-slate-800 bg-slate-950 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <button onClick={() => openDump(d.id)} className="text-sm font-medium hover:text-violet-300">
+                        {new Date(d.createdAt).toLocaleString()}
+                      </button>
+                      <span className="text-xs text-slate-500">{d.tasks.filter((t) => t.status === "open").length} open</span>
+                    </div>
+                    <p className="line-clamp-2 text-sm text-slate-300">{d.content}</p>
+                    {d.aiSummary && <p className="mt-2 line-clamp-2 text-xs text-violet-200">{d.aiSummary}</p>}
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {d.tags.map((t) => (
+                        <button key={t} onClick={() => setTagFilter(t)} className="rounded bg-slate-800 px-2 py-0.5 text-xs">#{t}</button>
+                      ))}
+                      {d.entities.map((e) => (
+                        <button key={e} onClick={() => setEntityFilter(e)} className="rounded bg-slate-800 px-2 py-0.5 text-xs">{e}</button>
+                      ))}
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
         </div>
       </main>
     </div>

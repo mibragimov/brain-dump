@@ -1,26 +1,29 @@
 # Brain Dump + AI
 
-Just type everything in your head. Let AI help organize.
+Zero-friction capture for scattered thoughts — with AI summaries and an action hub across all dumps.
 
-## Features
+## What this version includes (BRD-aligned MVP)
 
-- **Free-form typing** - Dump anything in your head without structure
-- **Auto-save** - Your work is saved automatically
-- **AI Analysis** - Click "AI Organize" to get:
-  - Summary of your dump
-  - Actionable items
-  - Relevant tags
-- **Hashtag support** - Use #tags anywhere in your text
-- **Search** - Find past dumps by content or tags
-- **Export/Import** - Backup your data as JSON
-- **Expandable entries** - Click to see full dump with AI suggestions
+- **Free-form capture** with auto-save
+- **Per-dump AI organize** (summary, action items, suggested tags)
+- **Tags + entity extraction** (hashtags + MVP-lite entity chips)
+- **Task layer** on top of dumps
+  - Mark done/open
+  - Edit due dates
+  - Add/remove manual tasks
+- **Unified action views**: Today / This week / All
+- **Search + filter** across content, summaries, tags, entities
+- **Local-first storage** (no account required)
+- **Export / import JSON** with conflict handling by latest `updatedAt`
+- **PWA-ready manifest**
 
-## Tech Stack
+## Stack
 
 - Next.js 14
 - TypeScript
 - Tailwind CSS
-- MiniMax AI (optional)
+- LocalStorage (MVP local-first data)
+- MiniMax (optional) for AI analysis
 
 ## Setup
 
@@ -29,7 +32,9 @@ npm install
 npm run dev
 ```
 
-## Environment Variables
+Open http://localhost:3000
+
+## Environment
 
 Create `.env.local` for AI features:
 
@@ -37,11 +42,25 @@ Create `.env.local` for AI features:
 MINIMAX_API_KEY=your_api_key_here
 ```
 
-Get a free API key at https://platform.minimax.chat
+Without a key, the app falls back to mock AI responses so flows remain testable.
 
-## AI Feature
+## Data model
 
-The AI feature is optional. Without an API key, it provides basic suggestions. With a MiniMax API key, you get full AI-powered organization.
+Each dump stores:
+
+- `id`
+- `content`
+- `tags[]`
+- `entities[]`
+- `createdAt`, `updatedAt`
+- `aiSummary`
+- `aiActions[]`
+- `tasks[]` where each task has:
+  - `id`, `label`, `status` (`open|done`), `dueDate`, `source` (`ai|manual`)
+
+## Keyboard shortcuts
+
+- **Cmd/Ctrl + Enter** → AI Organize
 
 ## Build
 
@@ -50,6 +69,6 @@ npm run build
 npm start
 ```
 
-## Data Storage
+## Notes
 
-All data is stored in your browser's localStorage. Use Export to create backups.
+This is MVP local-first architecture by design. Cloud sync/collab/cross-dump AI Q&A are intentionally kept for post-MVP phases.
