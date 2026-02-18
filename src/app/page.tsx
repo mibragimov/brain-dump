@@ -405,30 +405,30 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <div className="cartoon-ui min-h-screen bg-slate-950 text-slate-100">
       <main className="mx-auto max-w-7xl p-4 md:p-8">
         <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <Brain className="text-violet-300" />
+            <Brain className="text-violet-300 animate-float" />
             <div>
-              <h1 className="text-2xl font-semibold">Brain Dump + AI</h1>
-              <p className="text-sm text-slate-400">Zero-friction capture. AI-organized summaries and actions.</p>
+              <h1 className="text-2xl font-semibold">🧠 Brain Dump + AI</h1>
+              <p className="text-sm text-slate-300">Type messy thoughts, get clean actions. Fast, fun, and local-first.</p>
             </div>
           </div>
           <div className="flex gap-2">
-            <button onClick={exportJson} className="rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">
+            <button onClick={exportJson} className="fun-btn fun-bounce rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">
               <Download className="mr-1 inline h-4 w-4" /> Export
             </button>
-            <button onClick={importJson} className="rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">
+            <button onClick={importJson} className="fun-btn fun-bounce rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">
               <Upload className="mr-1 inline h-4 w-4" /> Import
             </button>
           </div>
         </header>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-          <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-7">
+          <section className="fun-panel rounded-xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-7">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-medium text-slate-300">Capture</h2>
+              <h2 className="text-sm font-medium text-slate-200">✍️ Capture Zone</h2>
               <span className="text-xs text-slate-400">{saveState === "saving" ? "Saving…" : "Saved"}</span>
             </div>
             <textarea
@@ -436,19 +436,19 @@ export default function Home() {
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder="What's on your mind?"
-              className="h-72 w-full rounded-lg border border-slate-800 bg-slate-950 p-4 outline-none ring-violet-500 focus:ring-1"
+              className="h-72 w-full rounded-lg border-2 border-slate-700 bg-slate-950/90 p-4 outline-none ring-violet-500 focus:ring-2"
             />
 
             <div className="mt-3 flex flex-wrap gap-2">
-              <button onClick={saveCurrentDump} className="rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-900 hover:bg-white">
-                Save dump
+              <button onClick={saveCurrentDump} className="fun-btn fun-bounce rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-900 hover:bg-white">
+                💾 Save dump
               </button>
               <button
                 onClick={() => void runAIOrganize()}
                 disabled={isAnalyzing || !draft.trim()}
-                className="rounded-md bg-violet-500 px-3 py-2 text-sm text-white hover:bg-violet-400 disabled:opacity-60"
+                className="fun-btn fun-btn-primary animate-pulse-glow rounded-md bg-violet-500 px-3 py-2 text-sm text-white hover:bg-violet-400 disabled:opacity-60"
               >
-                <Sparkles className="mr-1 inline h-4 w-4" /> {isAnalyzing ? "Organizing…" : "AI Organize"}
+                <Sparkles className="mr-1 inline h-4 w-4" /> {isAnalyzing ? "Organizing…" : "✨ AI Organize"}
               </button>
               <span className="self-center text-xs text-slate-500">Shortcut: Cmd/Ctrl + Enter</span>
             </div>
@@ -466,7 +466,7 @@ export default function Home() {
                 ) : (
                   <ul className="space-y-2">
                     {selectedDump.tasks.map((task) => (
-                      <li key={task.id} className="rounded-md border border-slate-800 bg-slate-950 p-2">
+                      <li key={task.id} className={`rounded-md border border-slate-800 bg-slate-950 p-2 ${task.status === "done" ? "task-done" : ""}`}>
                         <div className="flex items-start justify-between gap-2">
                           <button
                             onClick={() => toggleTask(selectedDump.id, task.id)}
@@ -499,8 +499,8 @@ export default function Home() {
             )}
           </section>
 
-          <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-5">
-            <h2 className="mb-3 text-sm font-medium text-slate-300">Today / This week actions</h2>
+          <section className="fun-panel rounded-xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-5">
+            <h2 className="mb-3 text-sm font-medium text-slate-200">🚀 Today / This week actions</h2>
             <div className="mb-3 flex flex-wrap gap-2 text-sm">
               {([
                 ["today", "Today"],
@@ -513,7 +513,7 @@ export default function Home() {
                     setTaskWindow(k);
                     track("task_window_changed", { window: k });
                   }}
-                  className={`rounded px-2 py-1 ${taskWindow === k ? "bg-violet-500 text-white" : "bg-slate-800"}`}
+                  className={`fun-btn rounded px-2 py-1 ${taskWindow === k ? "bg-violet-500 text-white" : "bg-slate-800"}`}
                 >
                   {label}
                 </button>
@@ -563,7 +563,7 @@ export default function Home() {
             </div>
           </section>
 
-          <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-12">
+          <section className="fun-panel rounded-xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-12">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-medium text-slate-300">History</h2>
               <div className="relative w-full max-w-md">
@@ -593,10 +593,10 @@ export default function Home() {
                     {d.aiSummary && <p className="mt-2 line-clamp-2 text-xs text-violet-200">{d.aiSummary}</p>}
                     <div className="mt-2 flex flex-wrap gap-1">
                       {d.tags.map((t) => (
-                        <button key={t} onClick={() => setTagFilter(t)} className="rounded bg-slate-800 px-2 py-0.5 text-xs">#{t}</button>
+                        <button key={t} onClick={() => setTagFilter(t)} className="fun-chip rounded bg-slate-800 px-2 py-0.5 text-xs">#{t}</button>
                       ))}
                       {d.entities.map((e) => (
-                        <button key={e} onClick={() => setEntityFilter(e)} className="rounded bg-slate-800 px-2 py-0.5 text-xs">{e}</button>
+                        <button key={e} onClick={() => setEntityFilter(e)} className="fun-chip rounded bg-slate-800 px-2 py-0.5 text-xs">{e}</button>
                       ))}
                     </div>
                   </article>

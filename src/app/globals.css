@@ -13,7 +13,7 @@
 
 body {
   color: var(--foreground);
-  background: var(--background);
+  background: radial-gradient(circle at 20% 0%, #1f1d4d 0%, #0f172a 45%, #090e20 100%);
   font-family: system-ui, -apple-system, sans-serif;
 }
 
@@ -48,6 +48,17 @@ body {
   50% { box-shadow: 0 0 40px rgba(139, 92, 246, 0.8); }
 }
 
+@keyframes bounce-soft {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+
+@keyframes pop {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.07); }
+  100% { transform: scale(1); }
+}
+
 .animate-float {
   animation: float 3s ease-in-out infinite;
 }
@@ -61,4 +72,48 @@ body {
   background: rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Cartoon mode */
+.cartoon-ui .fun-panel {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.82), rgba(15, 23, 42, 0.88));
+  border: 2px solid rgba(96, 165, 250, 0.35);
+  box-shadow: 0 8px 20px rgba(8, 47, 73, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.cartoon-ui .fun-panel:hover {
+  border-color: rgba(168, 85, 247, 0.55);
+}
+
+.cartoon-ui .fun-btn {
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  transition: transform .15s ease, box-shadow .2s ease, filter .2s ease;
+}
+
+.cartoon-ui .fun-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.26);
+  filter: saturate(1.1);
+}
+
+.cartoon-ui .fun-btn:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+.cartoon-ui .fun-btn-primary {
+  background: linear-gradient(135deg, #7c3aed, #3b82f6);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.cartoon-ui .fun-chip {
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: linear-gradient(160deg, rgba(51, 65, 85, 0.65), rgba(30, 41, 59, 0.65));
+}
+
+.cartoon-ui .fun-bounce:hover {
+  animation: bounce-soft .4s ease;
+}
+
+.cartoon-ui .task-done {
+  animation: pop .25s ease;
 }
